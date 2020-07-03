@@ -19,7 +19,8 @@ write_df= function(x, path, delim='\t', na='NA', append=FALSE, col_names=!append
 
 maf_patient = read_tsv("../all_pass/maf_patient_list.tsv")
 tcga_purity = read_tsv("/Volumes/areca42TB2/gdc/purity/by_sample/tcga_sample_purity.tsv")
-ascat_patient = read_tsv("/Volumes/areca42TB/tcga/CNA/all_patient/sample_id/patient_sample_info.tsv")
+#ascat_patient = read_tsv("/Volumes/areca42TB/tcga/CNA/all_patient/sample_id/patient_sample_info.tsv")
+ascat_patient = read_tsv("/Volumes/areca42TB2/gdc/somatic_maf/extracted/somatic_comversion/ascat_classify/patient_sample_info.tsv")
 purity = read_tsv("/Volumes/areca42TB2/gdc/purity/Dvir_purity_data.tsv") 
 
 patient_list = maf_patient %>>%
@@ -35,3 +36,8 @@ patient_list = maf_patient %>>%
   dplyr::select(patient_id,cancer_type,sample_id,tumor_sample_id,mutation_num,ascat_ploidy,ASCAT,HE_staining,CPE,MAX)
 write_df(patient_list,"patient_list.tsv")
 
+patient_list%>>%
+  group_by(patient_id)%>>%
+  filter(mutation_num==max(mutation_num))%>>%
+  filter(tumor_sample_id==first(tumor_sample_id))%>>%ungroup%>>%
+  summarise(n=n(),mun=sum(mutation_num),mean=mean(mutation_num),sd=sd(mutation_num))%>>%View()

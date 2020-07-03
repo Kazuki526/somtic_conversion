@@ -20,7 +20,10 @@ while(<MAF>){
 		chomp;
 		my @line = split(/\t/,);
 		if($line[$col{n_depth}]==0){next;}
-		my ($td,$nd,$pur,$an)  =($line[$col{t_depth}],$line[$col{n_depth}],$line[$col{$purity_class}],$line[$col{allele_num}]);
+		my $pur = $line[$col{$purity_class}];
+		if($pur eq "NA"){$pur = $line[$col{HE_staining}];}
+		if($pur eq "NA"){$pur = $line[$col{ASCAT}];}
+		my ($td,$nd,$an)  =($line[$col{t_depth}],$line[$col{n_depth}],$line[$col{allele_num}]);
 		if($an==0){$an=1;}
 		if(($pur eq "NA")||($pur ==0)){next;}
 		my $depth_correction_value;
@@ -48,7 +51,10 @@ foreach my $canty (sort keys %maf){
 				chomp;
 				my @line = split(/\t/,);
 				if($line[$c{allele_num}]==0){next;}
-				my ($td,$nd,$pur,$an)  =($line[$c{t_depth}],$line[$c{n_depth}],$line[$c{$purity_class}],$line[$c{allele_num}]);
+				my $pur = $line[$c{$purity_class}];
+				if($pur eq "NA"){$pur = $line[$c{HE_staining}];}
+				if($pur eq "NA"){$pur = $line[$c{ASCAT}];}
+				my ($td,$nd,$an)  = ($line[$c{t_depth}],$line[$c{n_depth}],$line[$c{allele_num}]);
 				if(($pur eq "NA")||($pur ==0)){next;}
 				my $depth_correction_value = $td / $nd / ((1-$pur)+$pur*$an/2);
 				$correct_value{$line[$c{sample_id}]}.="$depth_correction_value,";

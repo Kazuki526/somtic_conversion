@@ -15,9 +15,9 @@ write_df= function(x, path, delim='\t', na='NA', append=FALSE, col_names=!append
                      row.names=FALSE, col.names=col_names)
 }
 #purity_class = "MAX"
-purity_class = "HE_staining"
-patient_list = read_tsv("patient_list.tsv")
-dcv_table=read_tsv(paste0("patients_mutect/dcv_status_",purity_class,".tsv"))
+purity_class = "CPE"
+#patient_list = read_tsv("patient_list.tsv")
+sample_list = read_tsv("sample_list.tsv")
 all_maf = read_tsv(paste0("all_pass_with_dist_position_",purity_class,".maf.gz"))
 all_maf%>>%count(patient_id)
 driver_gene = read_tsv("~/Dropbox/cooperative/machine_learning/gene_list/CGC_v89_without_fusion.tsv")%>>%

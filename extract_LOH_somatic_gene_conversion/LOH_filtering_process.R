@@ -14,98 +14,122 @@ write_df= function(x, path, delim='\t', na='NA', append=FALSE, col_names=!append
                      append=append, quote=FALSE, sep=delim, na=na,
                      row.names=FALSE, col.names=col_names)
 }
+print_tbl.df = function(x,..){print(as.data.frame(x))}
+
 #purity_class = "MAX"
-purity_class = "HE_staining"
-patient_list = read_tsv("patient_list.tsv")
-dcv_table=read_tsv(paste0("patients_mutect/dcv_status_",purity_class,".tsv"))
+purity_class = "CPE"
+#patient_list = read_tsv("patient_list.tsv")
+sample_list = read_tsv("sample_list.tsv")
 all_maf = read_tsv(paste0("all_pass_with_dist_position_",purity_class,".maf.gz"))
 all_maf%>>%count(patient_id)
 driver_gene = read_tsv("~/Dropbox/cooperative/machine_learning/gene_list/CGC_v89_without_fusion.tsv")%>>%
-  dplyr::rename(gene=`Gene Symbol`,role =`Role in Cancer`)%>>%dplyr::select(gene,role)
+  dplyr::rename(gene=`Gene Symbol`,role =`Role in Cancer`)%>>%dplyr::select(gene,role)%>>%
+  filter(str_detect(role,"TSG"))
 
 ###################################### allele count == 2 ######################################
-ac2_maf = all_maf %>>% filter(allele_num<=2)%>>%
-  inner_join(dcv_table%>>%filter(around25>0.5)%>>%dplyr::select(sample_id,median_dcv))%>>%
-  mutate(variant_type=ifelse(variant_type=="SNP","SNP","indel"))%>>%
-  mutate(purity = get(purity_class))%>>%filter(purity>0.5)
-ac2_maf %>>%count(patient_id,sample_id)%>>%(?.)%>>%
-  count(patient_id)
-ac2_maf%>>%count(variant_type)
-ac2_maf%>>%count(ascat_minor,variant_type)
+ac2_maf = all_maf %>>% filter(allele_num<=2,allele_num>0)%>>%
+  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
+  mutate(variant_type=ifelse(variant_type=="SNP","SNV","indel"))%>>%
+  mutate(genotype=ifelse(ascat_major==2,"AA",ifelse(ascat_minor==1,"AB","A")))
+all_maf %>>%
+  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
+  mutate(variant_type=ifelse(variant_type=="SNP","SNV","indel"))%>>%
+  mutate(genotype=ifelse(ascat_major==2,"AA",ifelse(ascat_minor==1,"AB","A")))%>>%
+  (?.%>>%count())%>>%(?.%>>%count(variant_type))%>>%
+  group_by(variant_type)%>>%mutate(all=n())%>>%ungroup()%>>%
+  filter(allele_num<=2,allele_num>0)%>>%
+  count(genotype, variant_type,all)%>>%mutate(ratio=round(n/all*1000)/10)%>>%print_tbl.df()
 
-## LOH mutation
-ac2_binom_test=function(.tbl){
-  pbinom( q = .tbl$t_alt*.tbl$purity,size = .tbl$t_depth,
-          prob=.tbl$ascat_major/.tbl$allele_num, lower.tail = F)
-}
-LOH_mutation_ac2 = ac2_maf%>>%mutate(vaf=t_alt/t_depth/purity)%>>%
-  mutate(allele_num=ifelse(allele_num==0,1,allele_num))%>>%
-  filter(vaf>(allele_num-0.5)/allele_num)%>>%
-  nest(t_depth,t_alt,purity,allele_num,ascat_major)%>>%
-  mutate(p_value=purrr::map(data,~ac2_binom_test(.)))%>>%
-  unnest()%>>%filter(ascat_minor==0 | p_value<0.01)
-LOH_mutation_ac2%>>%
-  count(ascat_minor,variant_type)
-## check ASCAT copy number by depth correlation value ###
-conversion=LOH_mutation_ac2 %>>%
-  mutate(mutect_dcv_posi_ratio=mutect_dcv_posi/mutect_mut_num)%>>%
-  mutate(dcv_check = ifelse(mutect_dcv_posi_ratio<0.1,"low",
-                            ifelse(mutect_dcv_posi_ratio>0.9,"dup","correct")))%>>%
-  filter(t_depth>20)%>>%
-  filter(ascat_minor==1,dcv_check=="correct")
-  #count(ascat_minor,dcv_check,variant_type)
-###################################### all ######################################
-focal_maf = all_maf %>>%
-  inner_join(dcv_table%>>%filter(around25>0.5)%>>%dplyr::select(sample_id,median_dcv))%>>%
-  mutate(variant_type=ifelse(variant_type=="SNP","SNP","indel"),
-         allele_count = ifelse(allele_num<=2,"<=2",">2"),
-         genotype = ifelse(ascat_minor==0,"homo","hetero"))%>>%
-  mutate(purity = get(purity_class))%>>%filter(purity>0.5)
-focal_maf %>>%count(patient_id,sample_id)%>>%(?.)%>>%
-  count(patient_id)
-focal_maf%>>%count(allele_count,variant_type)
-focal_maf %>>% count(allele_count,genotype,variant_type)
-## LOH mutation
-LOH_mutation = focal_maf%>>%mutate(vaf=t_alt/t_depth/purity)%>>%
-  mutate(allele_num=ifelse(allele_num==0,1,allele_num))%>>%
-  filter(vaf>(allele_num-0.5)/allele_num)%>>%
-  nest(t_depth,t_alt,purity,allele_num,ascat_major)%>>%
-  mutate(p_value=purrr::map(data,~ac2_binom_test(.)))%>>%
-  unnest()%>>%filter(ascat_minor==0 | p_value<0.01)
-LOH_mutation %>>% count(allele_count,genotype,variant_type)
-## check ASCAT copy number by depth correlation value ###
-LOH_mutation %>>%
-  mutate(mutect_dcv_posi_ratio=mutect_dcv_posi/mutect_mut_num)%>>%
-  mutate(dcv_check = ifelse(mutect_dcv_posi_ratio<0.1,"low",
-                            ifelse(mutect_dcv_posi_ratio>0.8,"dup","correct")))%>>%
-  count(allele_count,genotype,dcv_check,variant_type)%>>%
-  write_df(paste0("~/Dropbox/work/somatic_gene_conversion/focal_mutations_",purity_class,".tsv"))
 
-#################################### focus only driver gene ###################################
-driver_maf = focal_maf %>>% left_join(driver_gene) %>>%
-  mutate(cdg=ifelse(is.na(role),"no","cancer_driver_gene"),
-         variant_type=ifelse(impact=="HIGH","truncating",
-                             ifelse(impact=="MODERATE","missense","other"))) %>>%
-  filter(cdg != "no",variant_type!="other")
-driver_maf %>>%count(patient_id,sample_id)%>>%(?.)%>>%count(patient_id)
-driver_maf%>>%count(variant_type)
-driver_maf%>>%count(allele_count,variant_type)
-driver_maf %>>% count(allele_count,genotype,variant_type)
-## LOH mutation
-driver_LOH = driver_maf%>>%mutate(vaf=t_alt/t_depth/purity)%>>%
-  mutate(allele_num=ifelse(allele_num==0,1,allele_num))%>>%
-  filter(vaf>(allele_num-0.5)/allele_num)%>>%
-  nest(t_depth,t_alt,purity,allele_num,ascat_major)%>>%
-  mutate(p_value=purrr::map(data,~ac2_binom_test(.)))%>>%
-  unnest()%>>%filter(ascat_minor==0 | p_value<0.01)
-driver_LOH %>>% count(allele_count,genotype,variant_type)
-## check ASCAT copy number by depth correlation value ###
-driver_LOH %>>%
-  mutate(mutect_dcv_posi_ratio=mutect_dcv_posi/mutect_mut_num)%>>%
-  mutate(dcv_check = ifelse(mutect_dcv_posi_ratio<0.1,"low",
-                            ifelse(mutect_dcv_posi_ratio>0.8,"dup","correct")))%>>%
-  count(allele_count,genotype,dcv_check,variant_type)%>>%
-  write_df(paste0("~/Dropbox/work/somatic_gene_conversion/driver_mutations_",purity_class,".tsv"))
+#### excluding variants on short indel or wrong copy number estimation #####
+ac2_maf %>>%group_by(genotype,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
+  count(genotype, variant_type,bef)%>>%mutate(ratio=round(n/bef*1000)/10)%>>%print_tbl.df()
+
+
+tVAFscore=0.75
+### extruct truncal LOH mutation (tVAF > )
+ac2_maf %>>%filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
+  mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
+  ggplot()+geom_histogram(aes(x=tVAF),binwidth = 0.01)+
+  facet_wrap(~genotype,scales = "free")+scale_x_continuous(limits = c(0,2))
+
+ac2_maf %>>%filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
+  group_by(genotype,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
+  filter(tVAF>0.75)%>>%
+  count(genotype, variant_type,bef)%>>%mutate(ratio=round(n/bef*1000)/10)%>>%print_tbl.df()
+
+
+#####################################################################################################
+#################################### focus the gene mutation ########################################
+#####################################################################################################
+all_maf %>>%
+  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
+  mutate(genotype=ifelse(ascat_major==2,"AA",ifelse(ascat_minor==1,"AB","A")))%>>%
+  filter(impact=="MODERATE"|impact=="HIGH")%>>%
+  mutate(variant_type=ifelse(impact=="HIGH","truncating",ifelse(variant_type=="SNP","nonsynonymous","inframe_indel"))) %>>%
+  mutate(variant_type=factor(variant_type,levels=c("truncating","nonsynonymous","inframe_indel")))%>>%
+  filter(variant_type!="inframe_indel")%>>%
+  (?.%>>%count())%>>%(?.%>>%count(variant_type))%>>%
+  group_by(variant_type)%>>%mutate(all=n())%>>%ungroup()%>>%
+  filter(allele_num<=2,allele_num>0)%>>% 
+  (?.%>>%count(genotype, variant_type,all)%>>%mutate(ratio=round(n/all*1000)/10))%>>%
+  group_by(genotype,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
+  (?.%>>%count(genotype, variant_type,bef)%>>%mutate(ratio=round(n/bef*1000)/10))%>>%
+  group_by(genotype,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
+  filter(tVAF>0.75)%>>%
+  count(genotype, variant_type,bef)%>>%mutate(ratio=round(n/bef*1000)/10)%>>%print_tbl.df()
+
+
+
+
+
+
+ac2_maf_driver = all_maf %>>%
+  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>% 
+  inner_join(driver_gene) %>>%
+  filter(impact=="MODERATE"|impact=="HIGH")%>>%
+  mutate(variant_type=ifelse(impact=="HIGH","truncating",ifelse(variant_type=="SNP","nonsynonymous","inframe_indel")))%>>%
+  mutate(variant_type=factor(variant_type,levels=c("truncating","nonsynonymous","inframe_indel")))%>>%
+  (?.%>>%count())%>>%(?.%>>%count(variant_type))%>>%
+  mutate(genotype=ifelse(ascat_major==2,"AA",ifelse(ascat_minor==1,"AB","A")))
+
+ac2_maf_driver %>>%  filter(allele_num<=2,allele_num>0)%>>%
+  filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
+  mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
+  ggplot()+geom_histogram(aes(x=tVAF),binwidth = 0.02)+
+  facet_wrap(~genotype,scales = "free")+scale_x_continuous(limits = c(0,2))
+
+ac2_maf_driver %>>%
+  filter(variant_type!="inframe_indel")%>>%
+  (?.%>>%count())%>>%(?.%>>%count(variant_type))%>>%
+  group_by(variant_type)%>>%mutate(all=n())%>>%ungroup()%>>%
+  filter(allele_num<=2,allele_num>0)%>>% 
+  (?.%>>%count(genotype, variant_type,all)%>>%mutate(ratio=round(n/all*1000)/10))%>>%
+  group_by(genotype,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
+  (?.%>>%count(genotype, variant_type,bef)%>>%mutate(ratio=round(n/bef*1000)/10))%>>%
+  group_by(genotype,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
+  filter(tVAF>0.75)%>>%
+  count(genotype, variant_type,bef)%>>%mutate(ratio=round(n/bef*1000)/10)%>>%print_tbl.df()
+
+
+
+
+###### somatic gene conversion 確認用 ##############
+all_maf%>>%filter(ascat_minor==1,ascat_major==1)%>>%
+  inner_join(sample_list%>>%filter(purity>0.5,dcv_median95>dcv_sd95)%>>%dplyr::select(tumor_sample_id,screening,purity),
+             by=c("sample_id"="tumor_sample_id"))%>>%
+  mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
+  filter(tVAF>0.75) %>>%
+  dplyr::select(sample_id,cancer_type,chr,start,ref,alt,gene,variant_type,consequence,impact,
+                purity,screening,mutect_dcv_posi,mutect_mut_num,tVAF)%>>%
+  write_df("candidate_conversion_variants.tsv")
+  
 
 
 ##############################################################################
