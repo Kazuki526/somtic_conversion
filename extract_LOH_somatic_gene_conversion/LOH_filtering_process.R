@@ -28,11 +28,12 @@ driver_gene = read_tsv("~/Dropbox/cooperative/machine_learning/gene_list/CGC_v89
 
 ###################################### allele count == 2 ######################################
 if(0){# without binom
-  purity_cutoff=0
-  tvaf_cutoff=0.9
+  purity_cutoff=0.7
+  tvaf_cutoff=0.8
 all_maf %>>%
   filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
-  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
+  inner_join(sample_list%>>%filter(is.na(screening),purity>purity_cutoff)%>>%
+               dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
   mutate(genotype=ifelse(ascat_major==2,"AA",ifelse(ascat_minor==1,"AB","A")))%>>%
   mutate(variant_type=ifelse(variant_type=="SNP","SNV","indel"))%>>%
   (?.%>>%count(patient_id)%>>%count())%>>%
@@ -42,7 +43,7 @@ all_maf %>>%
   (?.%>>%count(genotype, variant_type,all)%>>%mutate(ratio=round(n/all*1000)/10))%>>%
   group_by(genotype,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
   mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
-  filter(tVAF>tvaf_cutoff)%>>%
+  filter(tVAF>tvaf_cutoff)%>>%View
   count(genotype, variant_type,bef)%>>%mutate(ratio=round(n/bef*1000)/10)%>>%
   mutate(freq=n/sum(n))
 }

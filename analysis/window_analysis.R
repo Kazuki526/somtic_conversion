@@ -27,15 +27,21 @@ driver_gene = read_tsv("~/Dropbox/cooperative/machine_learning/gene_list/CGC_v89
   filter(str_detect(role,"TSG"))
 chr_length = read_tsv("~/Dropbox/work/grch38datas/chr_arm_pq.tsv")%>>%
   group_by(chr)%>>%summarise(start=min(start),end=max(end))
-
+purity_cutoff=0.7
+tvaf_cutoff=0.8
 ###################################### allele count == 2 ######################################
-ac2_all_maf = all_maf %>>% filter(allele_num<=2,allele_num>0)%>>%
-  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
+ac2_all_maf = all_maf %>>% filter(ascat_major==1,ascat_minor==1)%>>%
+  inner_join(sample_list%>>%filter(is.na(screening),purity>purity_cutoff)%>>%
+               dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
   mutate(variant_type=ifelse(variant_type=="SNP","SNV","indel"))%>>%
-  filter(ascat_major==1,ascat_minor==1)%>>%
   filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
+  mutate(binom_purity=ifelse(purity>0.99,0.99,purity))%>>%
+  mutate(binom_purity=ifelse(allele_num==1,binom_purity/(2-binom_purity),binom_purity))%>>%
+  mutate(p=pbinom(t_alt,t_depth,binom_purity*0.5))%>>%
   mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
-  mutate(gene_conversion=ifelse(tVAF>0.75,1,0))
+  #filter(tVAF>0.8)%>>%
+  mutate(gene_conversion=ifelse(p>=0.95 & tVAF>tvaf_cutoff,1,0))
+
 
 ## 1Mb window density
 freq=ac2_all_maf %>>%
@@ -54,19 +60,21 @@ ggsave("~/Dropbox/work/somatic_gene_conversion/gene_conversion_density.pdf",freq
 ### recombination rate
 recombination_rate=read_tsv("~/Dropbox/work/grch38datas/recomb-hg38/genetic_map_GRCh38.tsv")
 recomb_conv=recombination_rate%>>%
-  mutate(window=pos %/% 10^6)%>>%
+  mutate(window=pos %/% (10^6))%>>%
   group_by(chr,window)%>>%filter(pos==max(pos))%>>%ungroup()%>>%
   group_by(chr)%>>%
   mutate(recomb_rate=(pos_cm-ifelse(is.na(lag(pos_cm)),0,lag(pos_cm)))/(pos-ifelse(is.na(lag(pos)),0,lag(pos))))%>>%
   left_join(ac2_all_maf %>>%
-              mutate(window=start %/% 10^6)%>>%
+              mutate(window=start %/% (10^6))%>>%
               group_by(chr,window)%>>%summarise(gene_conversion=sum(gene_conversion),all=n())%>>%
               ungroup()%>>% filter(all>50))%>>%
-  filter(!is.na(all))%>>%mutate(gene_conversion_rate=gene_conversion/all)
+  filter(!is.na(all))%>>%mutate(gene_conversion_rate=gene_conversion/all)%>>%
+  filter(gene_conversion_rate>0)
 
 cor.test(x=recomb_conv$gene_conversion_rate,y=recomb_conv$recomb_rate) # p-value = 5.452e-06
 r=cor(x=recomb_conv$gene_conversion_rate,y=recomb_conv$recomb_rate)
-cor_plot=recomb_conv%>>%
+#cor_plot=
+  recomb_conv%>>%
   ggplot()+geom_point(aes(x=gene_conversion_rate,y=recomb_rate))+
   geom_text(data=tibble(x=0,y=7e-6,label=paste0("r = ",signif(r,3))),
             aes(x=x,y=y,label=label),hjust=0,size=5)+

@@ -27,7 +27,8 @@ all_maf%>>%count(patient_id)
 driver_gene = read_tsv("~/Dropbox/cooperative/machine_learning/gene_list/CGC_v89_without_fusion.tsv")%>>%
   dplyr::rename(gene=`Gene Symbol`,role =`Role in Cancer`)%>>%dplyr::select(gene,role)#%>>%filter(str_detect(role,"TSG"))
 #dcv_tbl = read_tsv("patients_mutect/dcv_table_CPE.tsv")
-
+purity_cutoff=0.7
+tvaf_cutoff=0.8
 ###################################### allele count == 2 ######################################
 ac2_maf = all_maf %>>% filter(allele_num<=2,allele_num>0)%>>%
   inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
@@ -66,7 +67,8 @@ ac2_maf %>>%
 #####################################################################################################
 all_maf %>>%
   filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
-  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
+  inner_join(sample_list%>>%filter(is.na(screening),purity>purity_cutoff)%>>%
+               dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
   mutate(genotype=ifelse(ascat_major==2,"AA",ifelse(ascat_minor==1,"AB","A")))%>>%
   filter(impact=="MODERATE"|impact=="HIGH"|variant_classification=="Silent")%>>%
   mutate(variant_type=ifelse(impact=="HIGH","truncating",ifelse(variant_type=="SNP",
@@ -78,8 +80,11 @@ all_maf %>>%
   filter(allele_num<=2,allele_num>0)%>>% 
   (?.%>>%count(genotype, variant_type,all)%>>%mutate(ratio=round(n/all*1000)/10))%>>%
   group_by(genotype,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  mutate(binom_purity=ifelse(purity>0.99,0.99,purity))%>>%
+  mutate(binom_purity=ifelse(allele_num==1,binom_purity/(2-binom_purity),binom_purity))%>>%
+  mutate(p=pbinom(t_alt,t_depth,binom_purity*0.5))%>>%
   mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
-  filter(tVAF>0.75)%>>%View
+  filter((allele_num==2 & p>=0.95)|(allele_num==1),tVAF>tvaf_cutoff)%>>%
   count(genotype, variant_type,bef)%>>%mutate(ratio=round(n/bef*1000)/10)
 
 
@@ -89,7 +94,8 @@ all_maf %>>%
 
 ac2_maf_TSG = all_maf %>>%
   filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
-  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>% 
+  inner_join(sample_list%>>%filter(is.na(screening),purity>purity_cutoff)%>>%
+               dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
   inner_join(driver_gene%>>%filter(str_detect(role,"TSG"))) %>>%
   filter(impact=="MODERATE"|impact=="HIGH"|variant_classification=="Silent")%>>%
   mutate(variant_type=ifelse(impact=="HIGH","truncating",ifelse(variant_type=="SNP",
@@ -112,8 +118,11 @@ ac2_maf_TSG %>>%
   filter(allele_num<=2,allele_num>0)%>>% 
   (?.%>>%count(genotype, variant_type,all)%>>%mutate(ratio=round(n/all*1000)/10))%>>%
   group_by(genotype,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  mutate(binom_purity=ifelse(purity>0.99,0.99,purity))%>>%
+  mutate(binom_purity=ifelse(allele_num==1,binom_purity/(2-binom_purity),binom_purity))%>>%
+  mutate(p=pbinom(t_alt,t_depth,binom_purity*0.5))%>>%
   mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
-  filter(tVAF>0.75)%>>%
+  filter((allele_num==2 & p>=0.95)|(allele_num==1),tVAF>tvaf_cutoff)%>>%
   count(genotype, variant_type,bef)%>>%mutate(ratio=round(n/bef*1000)/10)%>>%print_tbl.df()
 
 
@@ -135,31 +144,47 @@ all_maf%>>%filter(ascat_minor==1,ascat_major==1)%>>%
 ############################### 解析 #########################################
 ##############################################################################
 # gene conversin rate of all gene VS TSG
-TSG_all_GCrate=all_maf %>>%
+TSG_all_GCrate= all_maf %>>%
   filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
-  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>% 
+  inner_join(sample_list%>>%filter(is.na(screening),purity>purity_cutoff)%>>%
+               dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>%
   mutate(genotype=ifelse(ascat_major==2,"AA",ifelse(ascat_minor==1,"AB","A"))) %>>%filter(genotype=="AB")%>>%
   left_join(driver_gene%>>%filter(str_detect(role,"TSG"))%>>%mutate(role="TSG")) %>>%
   mutate(role=ifelse(is.na(role),"non TSG",role))%>>%
   filter(impact=="MODERATE"|impact=="HIGH"|variant_classification=="Silent")%>>%
-  mutate(variant_type=ifelse(impact=="HIGH","truncating",ifelse(variant_type=="SNP",
-                            ifelse(variant_classification=="Silent","synonymous","nonsynonymous"),"inframe_indel"))) %>>%
-  mutate(variant_type=factor(variant_type,levels=c("truncating","nonsynonymous","synonymous","inframe_indel")))%>>%
+  mutate(variant_type=ifelse(impact=="HIGH","Truncating",ifelse(variant_type=="SNP",
+                            ifelse(variant_classification=="Silent","Synonymous","Nonsynonymous"),"inframe_indel"))) %>>%
+  mutate(variant_type=factor(variant_type,levels=c("Truncating","Nonsynonymous","Synonymous","inframe_indel")))%>>%
   filter(variant_type!="inframe_indel")%>>%
   filter(allele_num<=2,allele_num>0)%>>% 
   group_by(genotype,role,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  mutate(binom_purity=ifelse(purity>0.99,0.99,purity))%>>%
+  mutate(binom_purity=ifelse(allele_num==1,binom_purity/(2-binom_purity),binom_purity))%>>%
+  mutate(p=pbinom(t_alt,t_depth,binom_purity*0.5))%>>%
   mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
-  filter(tVAF>0.75)%>>%
-  count(genotype, role, variant_type,bef,)%>>%mutate(ratio=n/bef)%>>%(?.)%>>%
-  ggplot()+geom_bar(aes(x=role,y=ratio),stat="identity")+facet_wrap(.~ variant_type)+
-  geom_signif(stat="identity",data=data.frame(x=1,xend=2,y=0.045,yend=0.045,p="***",variant_type="truncating"),
-              aes(x=x,y=y,xend=xend,yend=yend,annotation=p))+
-  theme_bw()+ylab("Gene conversion rate")+theme(axis.title.x = element_blank())
-TSG_all_GCrate  
+  filter((allele_num==2 & p>=0.95)|(allele_num==1),tVAF>tvaf_cutoff)%>>%
+  count(genotype, role, variant_type,bef)%>>%mutate(ratio=n/bef)%>>%(?.)%>>%
+  ggplot(aes(x=role,y=ratio))+geom_bar(stat="identity")+facet_wrap(.~ variant_type)+
+  geom_signif(data=data.frame(variant_type=c("Truncating"),role=0,ratio=0,g=1),aes(group=g),
+              xmin=1,xmax=2,y_position=0.027,annotations="**",textsize = 6)+
+  geom_signif(data=data.frame(variant_type=c("Nonsynonymous","Synonymous"),role=0,ratio=0,g=1),aes(group=g),
+              xmin=1,xmax=2,y_position=0.012,annotations="NS",textsize = 6)+
+  #geom_signif(stat="identity",
+  #            data=data.frame(x=c(1,1,1),xend=c(2,2,2),y=c(0.028,0.018,0.018),yend=c(0.028,0.018,0.018),
+  #                            p=c("**","NS","NS"),variant_type=c("truncating","nonsynonymous","synonymous")),
+  #            aes(x=x,y=y,xend=xend,yend=yend,annotation=p),textsize=12,tip_length = 10)+
+  theme_bw()+ylab("Ratio of mutation caused gene conversion")+
+  scale_y_continuous(limits = c(0,0.028))+
+  theme(axis.title.x = element_blank(),axis.title.y=element_text(size=24),
+        axis.text = element_text(size = 16),strip.text.x = element_text(size=20))
+TSG_all_GCrate
+ggsave("~/Dropbox/work/somatic_gene_conversion/TSGvsAllgene.pdf",TSG_all_GCrate,height = 8,width = 10)
+
   
 TSG_all_LOHfreq=all_maf %>>%
   filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
-  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>% 
+  inner_join(sample_list%>>%filter(is.na(screening),purity>purity_cutoff)%>>%
+               dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>% 
   mutate(genotype=ifelse(ascat_major==2,"AA",ifelse(ascat_minor==1,"AB","A"))) %>>%
   left_join(driver_gene%>>%filter(str_detect(role,"TSG"))%>>%mutate(role="TSG")) %>>%
   mutate(role=ifelse(is.na(role),"non TSG",role))%>>%
@@ -170,9 +195,12 @@ TSG_all_LOHfreq=all_maf %>>%
   filter(variant_type!="inframe_indel")%>>%
   filter(allele_num<=2,allele_num>0)%>>% 
   group_by(genotype,role,variant_type)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  mutate(binom_purity=ifelse(purity>0.99,0.99,purity))%>>%
+  mutate(binom_purity=ifelse(allele_num==1,binom_purity/(2-binom_purity),binom_purity))%>>%
+  mutate(p=pbinom(t_alt,t_depth,binom_purity*0.5))%>>%
   mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
-  filter(tVAF>0.75)%>>%
-  count(genotype, role, variant_type,bef,)%>>%mutate(ratio=n/bef)%>>%(?.)%>>%
+  filter((allele_num==2 & p>=0.95)|(allele_num==1),tVAF>tvaf_cutoff)%>>%
+  count(genotype, role, variant_type,bef)%>>%mutate(ratio=n/bef)%>>%(?.)%>>%
   ggplot()+geom_bar(aes(x=role,y=n,fill=genotype),color="black",stat="identity",position = "fill")+facet_wrap(.~ variant_type)+
   theme_bw()+ylab("Frequency in LOH mutation")+theme(axis.title.x = element_blank())
 TSG_all_LOHfreq  
@@ -180,17 +208,21 @@ TSG_all_LOHfreq
 GC_rate = all_maf %>>%
   filter(allele_num<=2,allele_num>0)%>>% 
   filter(mutect_dcv_posi/mutect_mut_num > 0.1, mutect_dcv_posi/mutect_mut_num < 0.9) %>>%
-  inner_join(sample_list%>>%filter(is.na(screening))%>>%dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>% 
+  inner_join(sample_list%>>%filter(is.na(screening),purity>purity_cutoff)%>>%
+               dplyr::select(tumor_sample_id,purity),by=c("sample_id"="tumor_sample_id"))%>>% 
   mutate(genotype=ifelse(ascat_major==2,"AA",ifelse(ascat_minor==1,"AB","A"))) %>>%filter(genotype=="AB")%>>%
   #left_join(driver_gene%>>%filter(str_detect(role,"TSG"))%>>%mutate(role="TSG")) %>>%
   #mutate(role=ifelse(!is.na(role),role,ifelse(impact=="MODERATE"|impact=="HIGH"|variant_classification=="Silent","Gene region","Whole genome")))%>>%
   mutate(role=ifelse(impact=="MODERATE"|impact=="HIGH"|variant_classification=="Silent","Gene region","Whole genome"))%>>%
   group_by(genotype,role)%>>%mutate(bef=n())%>>%ungroup()%>>%
+  mutate(binom_purity=ifelse(purity>0.99,0.99,purity))%>>%
+  mutate(binom_purity=ifelse(allele_num==1,binom_purity/(2-binom_purity),binom_purity))%>>%
+  mutate(p=pbinom(t_alt,t_depth,binom_purity*0.5))%>>%
   mutate(tVAF = t_alt / (t_depth * (purity*allele_num/(purity*allele_num+2*(1-purity)))))%>>%
-  filter(tVAF>0.75)%>>%
+  filter((allele_num==2 & p>=0.95)|(allele_num==1),tVAF>tvaf_cutoff)%>>%
   count(genotype, role,bef)%>>%mutate(ratio=n/bef)%>>%(?.)%>>%
   ggplot()+geom_bar(aes(x=role,y=ratio),stat="identity")+
-  geom_signif(stat="identity",data=data.frame(x=1,xend=2,y=0.048,yend=0.048,p="***"),
+  geom_signif(stat="identity",data=data.frame(x=1,xend=2,y=0.02,yend=0.02,p="***"),
               aes(x=x,y=y,xend=xend,yend=yend,annotation=p))+
   theme_bw()+ylab("Gene conversion rate")+theme(axis.title.x = element_blank())
 GC_rate
@@ -198,9 +230,10 @@ GC_rate
 cowplot::plot_grid(TSG_all_GCrate,
                    cowplot::plot_grid(TSG_all_LOHfreq,GC_rate,nrow=1,rel_widths=c(3,1),labels=c("B","C")),
                    nrow = 2,labels=c("A",""))
-cowplot::plot_grid(TSG_all_GCrate,TSG_all_LOHfreq,GC_rate,nrow = 1,rel_widths = c(10,1,10))
-ggsave("~/Dropbox/work/somatic_gene_conversion/TSGvsAllgene.pdf",height = 8,width = 10)
-
+#cowplot::plot_grid(TSG_all_GCrate,TSG_all_LOHfreq,GC_rate,nrow = 1,rel_widths = c(10,1,10))
+#ggsave("~/Dropbox/work/somatic_gene_conversion/TSGvsAllgene.pdf",height = 8,width = 10)
+#Were truncating LOH by gene conversion selected?
+fisher.test(matrix(c(75734-540-3653+91,540-91,3653-91,91),nrow = 2))
 
 
 
